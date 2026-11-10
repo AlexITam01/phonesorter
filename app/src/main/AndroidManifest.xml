@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!--
+      Photo Sorter (local only).
+      Deliberately NO android.permission.INTERNET.
+      The core sort runs entirely on-device. The optional cloud path
+      (see CloudUpload.kt / README) is OFF by default, user-supplied,
+      and would require INTERNET to be added by the user who opts in.
+    -->
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+    <!-- Android 12 and below: -->
+    <uses-permission
+        android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32" />
+
+    <application
+        android:allowBackup="false"
+        android:icon="@mipmap/ic_launcher"
+        android:label="Photo Sorter"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.PhotoSorter">
+        <activity
+            android:name=".MainActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

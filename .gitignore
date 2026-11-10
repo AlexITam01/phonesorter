@@ -1,0 +1,13 @@
+# Local SDK location — never commit (points at this machine's SDK path)
+local.properties
+
+# Build outputs
+build/
+app/build/
+*.apk
+*.aab
+
+# Android Studio / Gradle
+.idea/
+*.iml
+.gradle/

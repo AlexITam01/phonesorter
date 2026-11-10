@@ -1,0 +1,84 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:padding="16dp">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Photo Sorter — local only"
+            android:textSize="22sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/tvPrivacy"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:textSize="13sp" />
+
+        <Button
+            android:id="@+id/btnScan"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:text="Scan photos" />
+
+        <Button
+            android:id="@+id/btnExportPlan"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Export plan (plan.csv / plan.json)" />
+
+        <TextView
+            android:id="@+id/tvProgress"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp" />
+
+        <TextView
+            android:id="@+id/tvSummary"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:text="Categories — tap to view, Approve to move/delete"
+            android:textStyle="bold" />
+
+        <androidx.recyclerview.widget.RecyclerView
+            android:id="@+id/rvCategories"
+            android:layout_width="match_parent"
+            android:layout_height="300dp"
+            android:layout_marginTop="8dp" />
+
+        <TextView
+            android:id="@+id/tvSelected"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:text="No category selected" />
+
+        <androidx.recyclerview.widget.RecyclerView
+            android:id="@+id/rvPhotos"
+            android:layout_width="match_parent"
+            android:layout_height="300dp"
+            android:layout_marginTop="8dp" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:text="Nothing is moved or deleted until you tap Approve for a category. NSFW explicit captions are always shown as [redacted]. Cloud upload is OFF by default — see README."
+            android:textSize="13sp" />
+    </LinearLayout>
+</ScrollView>
