@@ -33,36 +33,35 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
- * Photo Sorter v0.2.0 — local only.
+ * Photo Sorter v0.3.0 — local only.
  *
  * Flow:
- *  1. Scan: ViewModel reads MediaStore, makes a thumbnail (max 384 px)
- *     on-device, classifies it on-device, writes plan.csv / plan.json
- *     first (checkpointed every 10 photos).
+ *  1. Scan: tapping Scan enqueues SortWorker (WorkManager,
+ *     foreground). The worker reads MediaStore, makes a thumbnail
+ *     (max 384 px) on-device, classifies it on-device, and writes
+ *     plan.csv / plan.json first (checkpointed every 10 photos).
+ *     Exiting the app does NOT stop it; the green progress bar
+ *     is driven by the worker's progress Data.
  *  2. Results grouped by category with counts. Tap a category to
  *     see its thumbnails. Tap a thumbnail to reassign it; tap Deny
  *     on a needs-review photo to move it to "other" in the plan.
  *  3. Nothing moves or deletes until you tap "Approve move" or
  *     "Approve delete" for a category.
- *  4. Approved moves copy to Pictures/Sorted/<category>/, then
- *     ask Android to delete the original (system confirmation).
+ *  4. Approved moves copy to Pictures/Sorted/<category>/ via
+ *     MoveWorker (also WorkManager, foreground), then ask Android
+ *     to delete the originals (system confirmation).
+ *  5. After a shutdown, BootReceiver re-enqueues an unfinished
+ *     scan on boot; "Resume from saved plan" restores the last
+ *     checkpointed plan.
  *
- * v0.2 crash / lifecycle fixes (see README):
- *  - Scan/move run in SorterViewModel (viewModelScope), NOT in the
- *    Activity's lifecycleScope — rotation no longer cancels them,
- *    and the Classifier is closed in ViewModel.onCleared(), not in
- *    Activity.onDestroy().
- *  - All progress goes through StateFlow observed on the Main thread;
- *    no View is ever touched from Dispatchers.IO.
+ * v0.2 crash / lifecycle fixes (see README) still apply:
+ *  - All progress goes through StateFlow / WorkInfo observed on
+ *    the Main thread; no View is ever touched from Dispatchers.IO.
  *  - Dialogs and the delete launcher are guarded with
  *    isFinishing / isDestroyed checks.
  *  - Per-photo thumbnails in the grid are loaded with a tag check
  *    (holder recycled -> bitmap is not set on the wrong photo) and
  *    a recycled-bitmap guard.
- *  - The plan is checkpointed every 10 photos, so if the app is
- *    killed, "Resume from saved plan" restores the last checkpoint.
- *    A force-kill still stops in-progress work — no WorkManager
- *    is implemented in v0.2.0, and that limit is documented.
  *
  * No internet permission, no upload, no account.
  */
@@ -142,6 +141,64 @@ class MainActivity : AppCompatActivity() {
             viewModel.isScanning.collect { scanning ->
                 binding.btnScan.isEnabled = !scanning
                 binding.btnResume.isEnabled = !scanning && viewModel.hasSavedPlan()
+            }
+        }
+        // v0.3.0: observe WorkManager, not the ViewModel, for scan
+        // progress — the worker keeps running after the app is
+        // exited, and its progress Data drives the green bar.
+        viewModel.workInfos(SortWorker.TAG_SCAN).observe(this) { infos ->
+            val info = infos.firstOrNull() ?: return@observe
+            val progress = info.progress
+            val label = progress.getString(SortWorker.KEY_LABEL)
+            val done = progress.getInt(SortWorker.KEY_DONE, 0)
+            val total = progress.getInt(SortWorker.KEY_TOTAL, 0)
+            when (info.state) {
+                androidx.work.WorkInfo.State.RUNNING,
+                androidx.work.WorkInfo.State.ENQUEUED -> {
+                    if (label != null) binding.tvProgress.text = label
+                    if (total > 0) {
+                        binding.pbProgress.max = total
+                        binding.pbProgress.progress = done
+                        binding.pbProgress.visibility = View.VISIBLE
+                    }
+                }
+                androidx.work.WorkInfo.State.SUCCEEDED -> {
+                    viewModel.onScanWorkFinished(info.id)
+                }
+                androidx.work.WorkInfo.State.FAILED,
+                androidx.work.WorkInfo.State.CANCELLED -> {
+                    viewModel.onScanWorkFailed(info.id)
+                }
+                else -> { /* BLOCKED: nothing to show yet */ }
+            }
+        }
+        // v0.3.0: same for the move worker — when it succeeds,
+        // the ViewModel runs the pending callback, which asks
+        // Android to delete the originals (Activity-only step).
+        viewModel.workInfos(MoveWorker.TAG_MOVE).observe(this) { infos ->
+            val info = infos.firstOrNull() ?: return@observe
+            val progress = info.progress
+            val label = progress.getString(MoveWorker.KEY_LABEL)
+            val done = progress.getInt(MoveWorker.KEY_DONE, 0)
+            val total = progress.getInt(MoveWorker.KEY_TOTAL, 0)
+            when (info.state) {
+                androidx.work.WorkInfo.State.RUNNING,
+                androidx.work.WorkInfo.State.ENQUEUED -> {
+                    if (label != null) binding.tvProgress.text = label
+                    if (total > 0) {
+                        binding.pbProgress.max = total
+                        binding.pbProgress.progress = done
+                        binding.pbProgress.visibility = View.VISIBLE
+                    }
+                }
+                androidx.work.WorkInfo.State.SUCCEEDED -> {
+                    viewModel.onMoveWorkFinished(info.id, info.outputData)
+                }
+                androidx.work.WorkInfo.State.FAILED,
+                androidx.work.WorkInfo.State.CANCELLED -> {
+                    viewModel.onMoveWorkFailed(info.id)
+                }
+                else -> { /* BLOCKED: nothing to show yet */ }
             }
         }
         binding.btnResume.isEnabled = viewModel.hasSavedPlan()

@@ -147,6 +147,53 @@ Alex reported three v0.1 bugs; all three are fixed in this version:
      Deny does **NOT** delete or move the file — it only changes
      its category to `other` in the plan.
 
+## v0.3.0 — what changed (2026-11-10)
+
+Alex asked for three things; all three are in this version:
+
+1. **New launcher logo: 3×3 grid of blue squares on white.**
+   - `ic_launcher_foreground.xml` is now nine blue (`#1565C0`)
+     24×24 squares in a 3×3 grid (6 dp gaps, 12 dp margin) on the
+     white background (`ic_launcher_background.xml`, `#FFFFFF`).
+     `ic_launcher.xml` / `ic_launcher_round.xml` (adaptive icons)
+     are unchanged — they already point at that foreground +
+     background, so the new grid shows on both square and round
+     launcher shapes.
+2. **Sorting keeps running even if you exit the app.**
+   - Scan and approve-move copy now run as **WorkManager
+     foreground workers** (`SortWorker.kt`, `MoveWorker.kt`,
+     `androidx.work:work-runtime-ktx:2.9.0`, unique work with
+     `ExistingWorkPolicy.KEEP`). The workers run outside the
+     Activity/ViewModel lifecycle, show a "Sorting photos…"
+     notification while they work, and keep going after the app
+     is swiped away or the system kills the process. The green
+     progress bar is now driven by the workers' progress Data
+     (`Classified N / total`, `Copying N / total`), observed by
+     MainActivity from WorkInfo. Deletion of originals is still
+     Activity-only: when MoveWorker succeeds, MainActivity asks
+     Android to delete the originals, as in v0.2.
+   - Honest limits: WorkManager survives app exit and most
+     kills, but **not a force-stop** (Settings → Force stop
+     clears scheduled work) and aggressive battery optimisation
+     can delay it. If that happens, the checkpoint + resume
+     below is the recovery path — nothing is lost, at most the
+     in-flight batch is re-run.
+3. **The file sort is saved / resumed after shutdown.**
+   - The plan is still checkpointed to `plan.csv` / `plan.json`
+     **every 10 photos** (and after every Deny/reassign) — verified
+     kept in v0.3. `WorkState.kt` records a durable
+     "scan in progress" flag in SharedPreferences; a new
+     `BootReceiver` (registered in the manifest with
+     `RECEIVE_BOOT_COMPLETED`) re-enqueues an unfinished scan
+     on reboot. The re-enqueued scan starts from the top (it
+     does not resume mid-list), but the checkpointed plan is
+     still there — tap **Resume from saved plan** to see the
+     last checkpoint without waiting for the re-scan. A move
+     interrupted by shutdown is not auto-re-enqueued (its
+     delete step needs the Activity); the files already copied
+     stay in `Pictures/Sorted/<category>/` and the category
+     can simply be re-approved.
+
 ## How to use
 
 1. Install the APK (see Build below) on the phone.
@@ -154,7 +201,11 @@ Alex reported three v0.1 bugs; all three are fixed in this version:
 3. Wait — thumbnails are classified on-device; a few thousand photos
    take a while (ML Kit is ~0.1–1 s/photo on a modern phone). The
    green progress bar shows `Classified N / total` as it goes.
-   Rotating the phone no longer restarts or stops the scan.
+   Rotating the phone no longer restarts or stops the scan, and
+   neither does leaving the app — the scan keeps running in the
+   background (v0.3.0, WorkManager) and you can come back to it.
+   If the phone shuts down mid-scan, the scan is re-enqueued on
+   boot and the last checkpoint is recoverable via Resume.
 4. Review the category list with counts. Tap a category to see its
    thumbnails. Tap a thumbnail to reassign its category by hand.
    Tap **Deny** on a needs-review photo to send it to `other`.
@@ -245,8 +296,12 @@ settings.gradle.kts / build.gradle.kts / gradle.properties
 app/build.gradle.kts
 app/src/main/AndroidManifest.xml          # no INTERNET permission
 app/src/main/java/com/photosorter/app/
-  MainActivity.kt     # UI only: observes ViewModel, dialogs, approvals
-  SorterViewModel.kt  # v0.2.0: scan/move/deny, progress, checkpoints
+  MainActivity.kt     # UI only: observes ViewModel + WorkInfo, dialogs, approvals
+  SorterViewModel.kt  # v0.3.0: enqueues workers, plan, deny/reassign
+  SortWorker.kt       # v0.3.0: scan/classify in a foreground WorkManager worker
+  MoveWorker.kt       # v0.3.0: approve-move copy in a foreground WorkManager worker
+  BootReceiver.kt     # v0.3.0: re-enqueue unfinished scan after reboot
+  WorkState.kt        # v0.3.0: durable "sorting in progress" flags
   Classifier.kt       # thumbnail-only ML Kit classification
   NsfwClassifier.kt   # optional TFLite model, fallback = review queue
   Categories.kt       # category list (same as PC script)

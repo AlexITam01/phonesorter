@@ -11,8 +11,8 @@ android {
         applicationId = "com.photosorter.app"
         minSdk = 26
         targetSdk = 34
-        versionCode = 2
-        versionName = "0.2.0"
+        versionCode = 3
+        versionName = "0.3.0"
     }
 
     buildTypes {
@@ -47,6 +47,12 @@ dependencies {
     // v0.2.0: scan/move live in SorterViewModel so rotation does not
     // cancel them. viewModelScope survives configuration changes.
     implementation("androidx.lifecycle:lifecycle-viewmodel-ktx:2.8.5")
+
+    // v0.3.0: WorkManager — scan/move run as foreground workers,
+    // so leaving the app (or the system killing the process) does
+    // not stop them. Default WorkManager initialisation is used
+    // (no custom Configuration / Initializer needed).
+    implementation("androidx.work:work-runtime-ktx:2.9.0")
 
     // On-device image labelling only. ML Kit's on-device labeler runs
     // entirely on the phone; it does not send images to Google Cloud.
