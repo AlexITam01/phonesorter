@@ -69,7 +69,15 @@ class MoveWorker(appContext: Context, params: WorkerParameters) :
             .setSmallIcon(android.R.drawable.ic_menu_sort_by_size)
             .setOngoing(true)
             .build()
-        return ForegroundInfo(NOTIFICATION_ID, notification)
+        // v0.3.1 fix: same as SortWorker — Android 14 requires an
+        // explicit foreground service type (see SortWorker.kt).
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            ForegroundInfo(
+                NOTIFICATION_ID, notification,
+                android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
+        } else {
+            ForegroundInfo(NOTIFICATION_ID, notification)
+        }
     }
 
     override suspend fun doWork(): Result {
@@ -87,7 +95,9 @@ class MoveWorker(appContext: Context, params: WorkerParameters) :
         }.getOrElse { emptyList() }
         if (photos.isEmpty()) return Result.failure()
 
-        setForeground(createForegroundInfo("Copying photos to $folder…"))
+        // v0.3.1 fix: never let setForeground() crash the worker —
+        // degrade to a normal worker instead (see SortWorker.kt).
+        runCatching { setForeground(createForegroundInfo("Copying photos to $folder…")) }
         WorkState.setMoveInProgress(applicationContext, true)
         return try {
             var copied = 0

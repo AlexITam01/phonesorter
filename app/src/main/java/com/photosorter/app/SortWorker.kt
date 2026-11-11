@@ -77,11 +77,27 @@ class SortWorker(appContext: Context, params: WorkerParameters) :
             .setSmallIcon(android.R.drawable.ic_menu_sort_by_size)
             .setOngoing(true)
             .build()
-        return ForegroundInfo(NOTIFICATION_ID, notification)
+        // v0.3.1 fix: Android 14 (targetSdk 34) REQUIRES a foreground
+        // service type. v0.3.0 used the no-type ForegroundInfo and the
+        // manifest declared only FOREGROUND_SERVICE, so setForeground()
+        // threw and killed the worker process on Scan tap. Pass
+        // FOREGROUND_SERVICE_TYPE_DATA_SYNC explicitly (manifest now
+        // declares FOREGROUND_SERVICE_DATA_SYNC too).
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            ForegroundInfo(
+                NOTIFICATION_ID, notification,
+                android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
+        } else {
+            ForegroundInfo(NOTIFICATION_ID, notification)
+        }
     }
 
     override suspend fun doWork(): Result {
-        setForeground(createForegroundInfo("Sorting photos…"))
+        // v0.3.1 fix: setForeground() was the FIRST line of doWork(),
+        // outside any try/catch — if it threw (see above), the whole
+        // worker/app died before any progress was published. Degrade
+        // to a normal worker instead of crashing.
+        runCatching { setForeground(createForegroundInfo("Sorting photos…")) }
         WorkState.setScanInProgress(applicationContext, true)
         val classifier = Classifier(applicationContext)
         return try {

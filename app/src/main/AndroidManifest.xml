@@ -16,6 +16,11 @@
          service while sorting, and BootReceiver resumes an
          unfinished scan after a reboot. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <!-- v0.3.1 fix: Android 14 (targetSdk 34) requires the specific
+         foreground-service type permission for dataSync workers.
+         v0.3.0 declared only FOREGROUND_SERVICE, so setForeground()
+         in SortWorker/MoveWorker threw and crashed the app on Scan. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
     <application

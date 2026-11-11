@@ -3,9 +3,6 @@ package com.photosorter.app
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
-import androidx.work.ExistingWorkPolicy
-import androidx.work.OneTimeWorkRequestBuilder
-import androidx.work.WorkManager
 
 /**
  * v0.3.0 — resume sorting after a shutdown / reboot.
@@ -26,20 +23,16 @@ import androidx.work.WorkManager
  */
 class BootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
+        // v0.3.1: do NOT re-enqueue SortWorker on boot. v0.3.0 did,
+        // and the worker's setForeground() crash would then fire
+        // on every boot / app update while a scan flag was set.
+        // The scan_in_progress flag and the checkpointed plan are
+        // still there — the user taps "Resume from saved plan" in
+        // the app to pick up where the scan left off. Re-enqueueing
+        // the worker is paused until the worker path is verified
+        // on a real device.
         if (intent.action != Intent.ACTION_BOOT_COMPLETED &&
             intent.action != Intent.ACTION_MY_PACKAGE_REPLACED) return
-        val wm = WorkManager.getInstance(context)
-        if (WorkState.isScanInProgress(context)) {
-            val request = OneTimeWorkRequestBuilder<SortWorker>()
-                .addTag(SortWorker.TAG_SCAN)
-                .build()
-            wm.enqueueUniqueWork(
-                SortWorker.UNIQUE_SCAN, ExistingWorkPolicy.KEEP, request)
-        }
-        // A move interrupted by shutdown is not re-enqueued here:
-        // moves are short, user-approved, and their delete step
-        // needs the Activity. The copied files stay in
-        // Pictures/Sorted/<category>/ and the plan still lists
-        // the category, so the user can re-approve the move.
+        // Intentionally no WorkManager call here in v0.3.1.
     }
 }

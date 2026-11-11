@@ -1,48 +1,66 @@
 package com.photosorter.app
 
 import android.app.Application
+import android.content.ContentUris
+import android.content.ContentValues
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.os.Build
+import android.provider.MediaStore
+import android.util.Size
 import androidx.lifecycle.AndroidViewModel
-import androidx.lifecycle.LiveData
 import androidx.lifecycle.viewModelScope
-import androidx.work.ExistingWorkPolicy
-import androidx.work.OneTimeWorkRequestBuilder
-import androidx.work.WorkInfo
-import androidx.work.WorkManager
-import androidx.work.workDataOf
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
-import org.json.JSONArray
-import org.json.JSONObject
+import kotlinx.coroutines.withContext
 
 /**
- * v0.3.0 — the ViewModel no longer runs scan/move itself.
+ * v0.3.1 — Scan is BACK in the ViewModel (the proven v0.2 path).
  *
- * v0.2: scan/move ran in viewModelScope. That survived rotation,
- * but NOT leaving the app — swiping it away cancelled the work.
+ * Why the revert: v0.3.0 moved scan/move to WorkManager foreground
+ * workers, and Scan then crashed on Alex's S25 Ultra (API 34) with
+ * no progress bar at all, where v0.2 worked. The v0.3 worker path
+ * had three crash / no-progress defects that cannot be verified
+ * in this VM (no Gradle build here):
  *
- * v0.3: startScan() / moveCategory() only ENQUEUE WorkManager
- * work (SortWorker / MoveWorker, foreground, ExistingWorkPolicy.
- * KEEP). The workers run outside the Activity/ViewModel lifecycle,
- * so exiting the app does not stop them. MainActivity observes
- * workInfos(tag) and drives the green progress bar from the
- * workers' progress Data; when a worker finishes it calls
- * onScanWorkFinished() / onMoveWorkFinished() here (guarded by
- * work id, so a rotation re-emitting the same SUCCEEDED WorkInfo
- * does not reload the plan twice).
+ * 1. FOREGROUND SERVICE TYPE (most likely crash): SortWorker and
+ *    MoveWorker called setForeground() as the FIRST line of
+ *    doWork(), outside any try/catch, but the manifest declared
+ *    only FOREGROUND_SERVICE — not FOREGROUND_SERVICE_DATA_SYNC.
+ *    On Android 14 (targetSdk 34) a foreground service must
+ *    declare its type; starting one without the dataSync type
+ *    permission throws, killing the worker process — i.e. the
+ *    app — before any progress was ever published. Hence:
+ *    crash on Scan tap, no bar.
+ * 2. STALE WorkInfo: MainActivity observed getWorkInfosByTagLiveData
+ *    and took infos.firstOrNull() — that can be an OLD SUCCEEDED /
+ *    FAILED run, not the new one, so the bar was driven from stale
+ *    data (or never driven at all).
+ * 3. UNIQUE WORK KEEP: enqueueUniqueWork(KEEP) silently drops a
+ *    new scan if any previous scan work with that name exists, so
+ *    tapping Scan could do nothing at all, with no error.
+ *    WorkManager.getInstance() on the tap path is also a Main-thread
+ *    crash vector if initialisation ever fails.
  *
- * The Classifier is no longer owned here — each worker creates
- * and closes its own Classifier. hasNsfwModel() therefore
- * creates a short-lived Classifier just to check for a bundled
- * model file; that is cheap (it only opens assets/nsfw.tflite
- * if present, and closes it again).
+ * v0.3.1 therefore runs scan/move in viewModelScope again, exactly
+ * as v0.2 did (rotation-safe, progress via StateFlow, checkpoint
+ * every 10 photos). The workers are NOT enqueued for scan/move in
+ * this version; SortWorker/MoveWorker remain in the repo with the
+ * foreground-service fix below, but are not started, and
+ * BootReceiver no longer re-enqueues them (it would re-trigger
+ * the same crash on boot). Background-after-exit sorting is
+ * PAUSED in v0.3.1 until the worker path is verified on a real
+ * device — Scan working again comes first.
  *
- * Plan persistence (unchanged from v0.2, verified in v0.3):
- * the workers checkpoint plan.csv / plan.json every 10 photos,
- * and Deny/reassign write the plan immediately. Resume from
- * saved plan restores the last checkpoint after a shutdown.
+ * Worker hardening (for a future re-enable, not used in v0.3.1):
+ * - Manifest now declares FOREGROUND_SERVICE_DATA_SYNC.
+ * - SortWorker/MoveWorker createForegroundInfo() now passes
+ *   FOREGROUND_SERVICE_TYPE_DATA_SYNC on API 29+, and setForeground
+ *   is wrapped in try/catch so a foreground failure degrades to
+ *   a normal (non-foreground) worker instead of crashing.
  */
 class SorterViewModel(app: Application) : AndroidViewModel(app) {
 
@@ -67,23 +85,10 @@ class SorterViewModel(app: Application) : AndroidViewModel(app) {
     private val _isMoving = MutableStateFlow(false)
     val isMoving: StateFlow<Boolean> = _isMoving.asStateFlow()
 
-    /** Work ids already handled, so a rotation does not double-apply a finish. */
-    private val handledScanWorkIds = HashSet<java.util.UUID>()
-    private val handledMoveWorkIds = HashSet<java.util.UUID>()
+    /** Classifier owned here, closed only in onCleared() (v0.2 fix). */
+    private val classifier = Classifier(getApplication())
 
-    /** Pending move callback, run when MoveWorker succeeds. Set by moveCategory(). */
-    private var pendingMoveCallback: ((copied: Int, total: Int, folder: String) -> Unit)? = null
-    private var pendingMovePhotos: List<PhotoItem> = emptyList()
-
-    /** Cached: creating a Classifier just to probe for a model
-     *  file would spin up an ML Kit labeler on every call, and
-     *  MainActivity calls this on every summary refresh. */
-    private val nsfwModelPresent: Boolean by lazy {
-        val c = Classifier(getApplication())
-        try { c.hasNsfwModel() } finally { c.close() }
-    }
-
-    fun hasNsfwModel(): Boolean = nsfwModelPresent
+    fun hasNsfwModel(): Boolean = classifier.hasNsfwModel()
 
     fun hasSavedPlan(): Boolean = PlanStore.planExists(getApplication())
 
@@ -95,41 +100,133 @@ class SorterViewModel(app: Application) : AndroidViewModel(app) {
         _progressVisible.value = visible
     }
 
-    /** Live WorkInfo for a tag, observed by MainActivity for the progress bar. */
-    fun workInfos(tag: String): LiveData<List<WorkInfo>> =
-        WorkManager.getInstance(getApplication()).getWorkInfosByTagLiveData(tag)
+    override fun onCleared() {
+        super.onCleared()
+        runCatching { classifier.close() }
+    }
 
-    /** Enqueue the scan worker. Exiting the app does not stop it. */
+    /** v0.2 scan path, restored: runs in viewModelScope (rotation-safe). */
     fun startScan() {
         if (_isScanning.value) return
         _isScanning.value = true
-        setProgress("Starting scan… (keeps running if you leave the app)", 0, 0)
-        val request = OneTimeWorkRequestBuilder<SortWorker>()
-            .addTag(SortWorker.TAG_SCAN)
-            .build()
-        WorkManager.getInstance(getApplication()).enqueueUniqueWork(
-            SortWorker.UNIQUE_SCAN, ExistingWorkPolicy.KEEP, request)
-    }
-
-    /** Called once per finished scan WorkInfo (guarded by work id). */
-    fun onScanWorkFinished(workId: java.util.UUID) {
-        if (!handledScanWorkIds.add(workId)) return
-        _isScanning.value = false
-        if (resumeFromSavedPlan()) {
-            setProgress("Done. Plan saved (plan.csv / plan.json).",
-                _items.value.size, _items.value.size, visible = false)
-        } else {
-            setProgress("Scan finished, but no saved plan was found.",
-                0, 0, visible = false)
+        // Show the bar IMMEDIATELY, before any photo is read, so the
+        // user sees "Classified 0 / …" from the first moment.
+        setProgress("Starting scan…", 0, 0, visible = true)
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val found = queryPhotos()
+                withContext(Dispatchers.Main) {
+                    setProgress("Classified 0 / ${found.size}", 0, found.size, visible = true)
+                }
+                val classified = mutableListOf<PhotoItem>()
+                val seenHashes = HashSet<String>()
+                for ((index, item) in found.withIndex()) {
+                    val done = index + 1
+                    try {
+                        val thumb = loadThumbnail(item)
+                        if (thumb != null && !thumb.isRecycled) {
+                            val small = classifier.thumbnail(thumb, 384)
+                            if (!small.isRecycled) {
+                                val hash = classifier.thumbHash(small)
+                                if (hash.isNotEmpty() && !seenHashes.add(hash)) {
+                                    classified.add(item.copy(
+                                        category = "duplicate_near_duplicate",
+                                        confidence = 0.6f,
+                                        caption = "Same thumbnail as an earlier photo",
+                                        needsReview = true, thumbHash = hash))
+                                } else {
+                                    classified.add(
+                                        classifier.classify(item.copy(thumbHash = hash), small))
+                                }
+                            }
+                            if (small !== thumb && !small.isRecycled) small.recycle()
+                            if (!thumb.isRecycled) thumb.recycle()
+                        } else {
+                            classified.add(item.copy(category = "other", confidence = 0f,
+                                caption = "Thumbnail could not be read",
+                                needsReview = true))
+                        }
+                    } catch (e: Exception) {
+                        classified.add(item.copy(category = "other", confidence = 0f,
+                            caption = "Classification failed: ${e.message}",
+                            needsReview = true))
+                    }
+                    if (done % 10 == 0 || done == found.size) {
+                        val snapshot = classified.toList()
+                        runCatching { PlanStore.writePlan(getApplication(), snapshot) }
+                        withContext(Dispatchers.Main) {
+                            setProgress("Classified $done / ${found.size}",
+                                done, found.size, visible = true)
+                        }
+                    }
+                }
+                runCatching { PlanStore.writePlan(getApplication(), classified.toList()) }
+                withContext(Dispatchers.Main) {
+                    _items.value = classified
+                    _isScanning.value = false
+                    setProgress("Done: ${classified.size} photos. Plan saved (plan.csv / plan.json).",
+                        classified.size, classified.size, visible = false)
+                }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    _isScanning.value = false
+                    setProgress("Scan failed: ${e.message}",
+                        _progressDone.value, _progressTotal.value)
+                }
+            }
         }
     }
 
-    /** Called once per failed/cancelled scan WorkInfo (guarded by work id). */
-    fun onScanWorkFailed(workId: java.util.UUID) {
-        if (!handledScanWorkIds.add(workId)) return
-        _isScanning.value = false
-        setProgress("Scan stopped — resume from the saved plan to pick up where it left off.",
-            _progressDone.value, _progressTotal.value)
+    private fun queryPhotos(): List<PhotoItem> {
+        val out = mutableListOf<PhotoItem>()
+        val projection = arrayOf(
+            MediaStore.Images.Media._ID,
+            MediaStore.Images.Media.DISPLAY_NAME,
+            MediaStore.Images.Media.SIZE,
+            MediaStore.Images.Media.DATE_TAKEN,
+            MediaStore.Images.Media.WIDTH,
+            MediaStore.Images.Media.HEIGHT
+        )
+        getApplication<Application>().contentResolver.query(
+            MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+            projection, null, null,
+            "${MediaStore.Images.Media.DATE_TAKEN} DESC"
+        )?.use { cursor ->
+            val idCol = cursor.getColumnIndexOrThrow(MediaStore.Images.Media._ID)
+            val nameCol = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DISPLAY_NAME)
+            val sizeCol = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.SIZE)
+            val dateCol = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DATE_TAKEN)
+            val wCol = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.WIDTH)
+            val hCol = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.HEIGHT)
+            while (cursor.moveToNext()) {
+                val id = cursor.getLong(idCol)
+                out.add(PhotoItem(
+                    id = id,
+                    uri = ContentUris.withAppendedId(
+                        MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id),
+                    displayName = cursor.getString(nameCol) ?: "photo_$id",
+                    sizeBytes = cursor.getLong(sizeCol),
+                    dateTakenMs = cursor.getLong(dateCol),
+                    width = cursor.getInt(wCol),
+                    height = cursor.getInt(hCol)
+                ))
+            }
+        }
+        return out
+    }
+
+    private fun loadThumbnail(item: PhotoItem): Bitmap? {
+        return try {
+            if (Build.VERSION.SDK_INT >= 29) {
+                getApplication<Application>().contentResolver
+                    .loadThumbnail(item.uri, Size(384, 384), null)
+            } else {
+                getApplication<Application>().contentResolver
+                    .openInputStream(item.uri)?.use { input ->
+                        BitmapFactory.decodeStream(input)
+                    }
+            }
+        } catch (_: Exception) { null }
     }
 
     /** Restore the last checkpointed plan after the app was killed / shut down. */
@@ -175,62 +272,68 @@ class SorterViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
-     * Enqueue the move worker for a category. The copy runs in the
-     * foreground worker even if the user leaves the app. When it
-     * succeeds, MainActivity calls onMoveWorkFinished(), which runs
-     * [onCopied] on the Main thread so the Activity can ask
-     * Android to delete the originals — the delete launcher
-     * belongs to the Activity, not the worker.
+     * v0.2 move path, restored: copy runs in viewModelScope.
+     * When it succeeds, [onCopied] runs on the Main thread so the
+     * Activity can ask Android to delete the originals.
      */
     fun moveCategory(photos: List<PhotoItem>, category: String,
                      onCopied: (copied: Int, total: Int, folder: String) -> Unit) {
         if (_isMoving.value || photos.isEmpty()) return
         _isMoving.value = true
-        pendingMoveCallback = onCopied
-        pendingMovePhotos = photos
-        setProgress("Copying 0 / ${photos.size}", 0, photos.size)
-        val arr = JSONArray()
-        for (item in photos) {
-            arr.put(JSONObject().apply {
-                put("id", item.id)
-                put("uri", item.uri.toString())
-                put("display_name", item.displayName)
-            })
+        val folder = Categories.folderName(category)
+        setProgress("Copying 0 / ${photos.size}", 0, photos.size, visible = true)
+        viewModelScope.launch(Dispatchers.IO) {
+            var copied = 0
+            for ((index, item) in photos.withIndex()) {
+                try {
+                    val values = ContentValues().apply {
+                        put(MediaStore.Images.Media.DISPLAY_NAME, item.displayName)
+                        put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
+                        put(MediaStore.Images.Media.RELATIVE_PATH,
+                            "Pictures/Sorted/$folder")
+                    }
+                    val dest = getApplication<Application>().contentResolver.insert(
+                        MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
+                    if (dest != null) {
+                        val input = getApplication<Application>().contentResolver
+                            .openInputStream(item.uri)
+                        val output = if (input != null) {
+                            getApplication<Application>().contentResolver
+                                .openOutputStream(dest)
+                        } else null
+                        if (input != null && output != null) {
+                            input.use { input.copyTo(output) }
+                            output.close()
+                            copied++
+                        } else {
+                            input?.close()
+                            output?.close()
+                            getApplication<Application>().contentResolver
+                                .delete(dest, null, null)
+                        }
+                    }
+                } catch (_: Exception) {
+                    // Keep going; the result reports copied/total.
+                }
+                val done = index + 1
+                if (done % 10 == 0 || done == photos.size) {
+                    withContext(Dispatchers.Main) {
+                        setProgress("Copying $done / ${photos.size}",
+                            done, photos.size, visible = true)
+                    }
+                }
+            }
+            val finalCopied = copied
+            withContext(Dispatchers.Main) {
+                _isMoving.value = false
+                setProgress("Copied $finalCopied / ${photos.size} to Pictures/Sorted/$folder.",
+                    photos.size, photos.size, visible = false)
+                onCopied(finalCopied, photos.size, folder)
+            }
         }
-        val request = OneTimeWorkRequestBuilder<MoveWorker>()
-            .addTag(MoveWorker.TAG_MOVE)
-            .setInputData(workDataOf(
-                MoveWorker.KEY_CATEGORY to category,
-                MoveWorker.KEY_PHOTOS_JSON to arr.toString()))
-            .build()
-        WorkManager.getInstance(getApplication()).enqueueUniqueWork(
-            MoveWorker.UNIQUE_MOVE, ExistingWorkPolicy.KEEP, request)
-    }
-
-    /** Called once per finished move WorkInfo (guarded by work id). */
-    fun onMoveWorkFinished(workId: java.util.UUID, output: androidx.work.Data) {
-        if (!handledMoveWorkIds.add(workId)) return
-        _isMoving.value = false
-        val copied = output.getInt(MoveWorker.KEY_COPIED, 0)
-        val total = output.getInt(MoveWorker.KEY_TOTAL, pendingMovePhotos.size)
-        val folder = output.getString(MoveWorker.KEY_FOLDER)
-            ?: Categories.folderName("")
-        setProgress("Copied $copied / $total to Pictures/Sorted/$folder.",
-            total, total, visible = false)
-        val callback = pendingMoveCallback
-        pendingMoveCallback = null
-        callback?.invoke(copied, total, folder)
-    }
-
-    /** Called once per failed/cancelled move WorkInfo (guarded by work id). */
-    fun onMoveWorkFailed(workId: java.util.UUID) {
-        if (!handledMoveWorkIds.add(workId)) return
-        _isMoving.value = false
-        setProgress("Copy stopped — the files already copied stay in Pictures/Sorted/.",
-            _progressDone.value, _progressTotal.value)
-        pendingMoveCallback = null
     }
 
     /** Photos for the pending move, used by MainActivity to request deletion. */
-    fun pendingMoveUris(): List<android.net.Uri> = pendingMovePhotos.map { it.uri }
+    fun pendingMoveUris(photos: List<PhotoItem>): List<android.net.Uri> =
+        photos.map { it.uri }
 }

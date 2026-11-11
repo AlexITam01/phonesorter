@@ -194,6 +194,59 @@ Alex asked for three things; all three are in this version:
      stay in `Pictures/Sorted/<category>/` and the category
      can simply be re-approved.
 
+## v0.3.1 — URGENT FIX: Scan crashed in v0.3.0, no progress bar (2026-11-10)
+
+Alex reported: tapping **Scan photos** crashed the app in v0.3.0
+(it worked in v0.2), and no progress bar showed. Root causes
+found by reading the v0.3.0 code (no crash log was available —
+the exact on-device exception could not be confirmed from code
+alone, so all three defects below were fixed, not just one):
+
+1. **Foreground service type — most likely crash.** SortWorker
+   and MoveWorker called `setForeground()` as the FIRST line of
+   `doWork()`, outside any `try/catch`, but the manifest declared
+   only `FOREGROUND_SERVICE` — not `FOREGROUND_SERVICE_DATA_SYNC`.
+   On Android 14 (targetSdk 34, Alex's S25 Ultra) a foreground
+   service must declare its type; starting one without it throws
+   and kills the worker process — i.e. the app — before any
+   progress was ever published. Hence: crash on Scan tap, no bar.
+   Fixed two ways: the manifest now declares
+   `FOREGROUND_SERVICE_DATA_SYNC`, the workers pass
+   `FOREGROUND_SERVICE_TYPE_DATA_SYNC` explicitly, AND
+   `setForeground()` is wrapped in `runCatching` so a foreground
+   failure degrades to a normal worker instead of crashing.
+2. **Stale WorkInfo — why no bar showed.** MainActivity observed
+   `getWorkInfosByTagLiveData()` and took `infos.firstOrNull()`,
+   which can be an OLD SUCCEEDED/FAILED run, not the new one —
+   so the bar was driven from stale data, or never driven.
+3. **Unique-work KEEP — why Scan could do nothing.** 
+   `enqueueUniqueWork(KEEP)` silently drops a new scan if any
+   previous scan work with that name exists. Plus
+   `WorkManager.getInstance()` on the tap path is a Main-thread
+   crash vector if initialisation ever fails.
+
+**The fix (v0.3.1): Scan and approve-move are BACK in the
+ViewModel** — the proven v0.2 path (`viewModelScope`, progress
+via StateFlow, checkpoint every 10 photos, Classifier closed
+only in `onCleared()`). The green bar is shown immediately on
+Scan tap (`"Starting scan…"`, then `"Classified 0 / N"`,
+`"Classified N / total"` from the first photo) — it is driven
+by the ViewModel, not by WorkInfo, and the WorkInfo observers
+were removed from MainActivity. The workers are NOT enqueued
+for scan/move in v0.3.1, and BootReceiver no longer re-enqueues
+them on boot (that would re-trigger the same crash). 
+**Honest trade-off:** background sorting after exiting the app
+(the v0.3.0 feature) is PAUSED in v0.3.1 until the worker path
+is verified on a real device — Scan working again comes first.
+Rotation still survives (ViewModel), and Resume from saved plan
+still recovers after a shutdown.
+
+**If it still crashes in v0.3.1, Alex should report:** exactly
+what was tapped (Scan / Approve move / Resume), whether the
+crash was instant or after a few seconds, and whether the green
+bar appeared at all — that distinguishes a remaining worker
+issue from a classifier / thumbnail issue.
+
 ## How to use
 
 1. Install the APK (see Build below) on the phone.
