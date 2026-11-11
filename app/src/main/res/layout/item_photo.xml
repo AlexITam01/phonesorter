@@ -18,4 +18,15 @@
         android:ellipsize="end"
         android:maxLines="1"
         android:textSize="11sp" />
+
+    <!-- v0.2.0: Deny button, shown only for needs-review photos.
+         Tapping it moves the photo to category "other" in the plan.
+         It does NOT delete or move the file. -->
+    <Button
+        android:id="@+id/btnDeny"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Deny"
+        android:textSize="11sp"
+        android:visibility="gone" />
 </LinearLayout>

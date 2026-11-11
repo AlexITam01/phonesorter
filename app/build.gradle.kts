@@ -11,8 +11,8 @@ android {
         applicationId = "com.photosorter.app"
         minSdk = 26
         targetSdk = 34
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 2
+        versionName = "0.2.0"
     }
 
     buildTypes {
@@ -44,6 +44,9 @@ dependencies {
     implementation("com.google.android.material:material:1.12.0")
     implementation("androidx.activity:activity-ktx:1.9.2")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.5")
+    // v0.2.0: scan/move live in SorterViewModel so rotation does not
+    // cancel them. viewModelScope survives configuration changes.
+    implementation("androidx.lifecycle:lifecycle-viewmodel-ktx:2.8.5")
 
     // On-device image labelling only. ML Kit's on-device labeler runs
     // entirely on the phone; it does not send images to Google Cloud.

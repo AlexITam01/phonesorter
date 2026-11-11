@@ -96,17 +96,73 @@ Approved moves go to `Pictures/Sorted/<category>/` on device storage
   - Do not treat a "not NSFW" result as proof an image is safe.
     It is a triage signal only.
 
+## v0.2.0 — what changed (2026-11-10)
+
+Alex reported three v0.1 bugs; all three are fixed in this version:
+
+1. **Green progress bar with numerals, and the crash is fixed.**
+   - A green horizontal `ProgressBar` (`#2E7D32`, determinate) sits
+     under the Scan button, with numerals on top in `tvProgress`:
+     `Classified 12 / 48` during a scan, `Copying 12 / 48` during
+     an approve-move copy. Its max/progress come from the ViewModel.
+   - Crash causes found in v0.1 and fixed:
+     - Scan/move ran in the Activity's `lifecycleScope` and the
+       Classifier was closed in `Activity.onDestroy()` — rotating
+       the phone cancelled the coroutine and closed the Classifier
+       while it was still in use. Work now lives in
+       `SorterViewModel` (closed in `ViewModel.onCleared()` only).
+     - Per-photo grid thumbnails were set on a `RecyclerView`
+       holder after an async load with no check that the holder
+       still showed the same photo — wrong-photo / crash path.
+       Now the holder's `tag` (photo id) is checked before
+       `setImageBitmap`, and recycled bitmaps are guarded
+       (`Classifier.thumbnail()` / `thumbHash()` return a safe
+       placeholder / empty hash instead of throwing).
+     - `AlertDialog` and the delete launcher could fire on a
+       destroyed Activity — now guarded with `isFinishing` /
+       `isDestroyed` checks. All progress updates go through
+       `StateFlow` observed on the Main thread; no View is ever
+       touched from `Dispatchers.IO`.
+2. **Rotation / leaving the app no longer stops a scan or move.**
+   - Scan/classify/move run in `SorterViewModel.viewModelScope`,
+     which survives rotation. The Activity just re-attaches and
+     re-observes progress. Selected category is saved in
+     `onSaveInstanceState`.
+   - The plan is checkpointed to `plan.csv` / `plan.json` **every
+     10 photos** (and after every Deny/reassign). If the app is
+     killed or swiped away, tap **Resume from saved plan** on next
+     launch to restore the last checkpoint instead of re-scanning.
+   - Honest limit: a ViewModel survives rotation, **not** a
+     force-kill. Work stops if Android kills the app; the
+     checkpoint + resume is the recovery path. No WorkManager is
+     implemented in v0.2.0, so background work after a force-kill
+     is NOT claimed.
+3. **Per-photo Deny button.**
+   - Each needs-review photo now has a **Deny** button under its
+     thumbnail (hidden for photos that don't need review).
+     Tapping Deny reassigns that photo to category `other`,
+     sets `needsReview=false`, caption
+     `Denied by user — moved to other`, writes the updated plan
+     immediately, and refreshes the category counts.
+     Deny does **NOT** delete or move the file — it only changes
+     its category to `other` in the plan.
+
 ## How to use
 
 1. Install the APK (see Build below) on the phone.
 2. Open **Photo Sorter**, tap **Scan photos**, grant photo permission.
 3. Wait — thumbnails are classified on-device; a few thousand photos
-   take a while (ML Kit is ~0.1–1 s/photo on a modern phone).
+   take a while (ML Kit is ~0.1–1 s/photo on a modern phone). The
+   green progress bar shows `Classified N / total` as it goes.
+   Rotating the phone no longer restarts or stops the scan.
 4. Review the category list with counts. Tap a category to see its
    thumbnails. Tap a thumbnail to reassign its category by hand.
+   Tap **Deny** on a needs-review photo to send it to `other`.
+   If the app was killed mid-scan, tap **Resume from saved plan**.
 5. When a category looks right, tap **Approve move** (copies to
    `Pictures/Sorted/<category>/`, then Android asks to delete the
    originals) or **Approve delete** (Android asks to delete).
+   The green bar shows `Copying N / total` during the copy.
 6. `plan.csv` / `plan.json` are saved in the app's files dir first,
    so you can check the plan before approving anything.
 
@@ -189,7 +245,8 @@ settings.gradle.kts / build.gradle.kts / gradle.properties
 app/build.gradle.kts
 app/src/main/AndroidManifest.xml          # no INTERNET permission
 app/src/main/java/com/photosorter/app/
-  MainActivity.kt     # scan, grouped results, per-category approval
+  MainActivity.kt     # UI only: observes ViewModel, dialogs, approvals
+  SorterViewModel.kt  # v0.2.0: scan/move/deny, progress, checkpoints
   Classifier.kt       # thumbnail-only ML Kit classification
   NsfwClassifier.kt   # optional TFLite model, fallback = review queue
   Categories.kt       # category list (same as PC script)

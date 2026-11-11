@@ -33,6 +33,12 @@ class Classifier(context: Context) {
 
     /** Downscale to at most [maxPx] on the long edge. */
     fun thumbnail(source: Bitmap, maxPx: Int = 384): Bitmap {
+        // v0.2.0: never operate on a recycled bitmap — that throws
+        // IllegalStateException and was a v0.1 crash path. Return a
+        // 1x1 placeholder; the caller treats it as unreadable.
+        if (source.isRecycled) {
+            return Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888)
+        }
         val longEdge = maxOf(source.width, source.height)
         if (longEdge <= maxPx) return source
         val scale = maxPx.toFloat() / longEdge
@@ -45,6 +51,9 @@ class Classifier(context: Context) {
     }
 
     fun thumbHash(thumb: Bitmap): String {
+        // v0.2.0: recycled bitmap -> empty hash (no duplicate match),
+        // instead of crashing in getPixels().
+        if (thumb.isRecycled) return ""
         // Cheap duplicate signal: MD5 of the downscaled pixels.
         val pixels = IntArray(thumb.width * thumb.height)
         thumb.getPixels(pixels, 0, thumb.width, 0, 0, thumb.width, thumb.height)

@@ -36,11 +36,33 @@
             android:layout_height="wrap_content"
             android:text="Export plan (plan.csv / plan.json)" />
 
+        <Button
+            android:id="@+id/btnResume"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Resume from saved plan" />
+
+        <!-- v0.2.0: green determinate progress bar. Numerals are in
+             tvProgress directly above it, e.g. "Classified 12 / 48"
+             and "Copying 12 / 48". max/progress are set from the
+             ViewModel (progressTotal / progressDone). -->
+        <ProgressBar
+            android:id="@+id/pbProgress"
+            style="?android:attr/progressBarStyleHorizontal"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:max="1"
+            android:progress="0"
+            android:progressTint="#2E7D32"
+            android:progressBackgroundTint="#C8E6C9"
+            android:visibility="gone" />
+
         <TextView
             android:id="@+id/tvProgress"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="8dp" />
+            android:layout_marginTop="4dp" />
 
         <TextView
             android:id="@+id/tvSummary"
