@@ -25,6 +25,9 @@ object WorkState {
     private const val PREFS = "photo_sorter_work"
     private const val KEY_SCAN_IN_PROGRESS = "scan_in_progress"
     private const val KEY_MOVE_IN_PROGRESS = "move_in_progress"
+    // v0.4: Colab upload / sort in-flight flags (same purpose as above).
+    private const val KEY_COLAB_UPLOAD_IN_PROGRESS = "colab_upload_in_progress"
+    private const val KEY_COLAB_SORT_IN_PROGRESS = "colab_sort_in_progress"
 
     fun setScanInProgress(context: Context, inProgress: Boolean) {
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -43,4 +46,22 @@ object WorkState {
     fun isMoveInProgress(context: Context): Boolean =
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             .getBoolean(KEY_MOVE_IN_PROGRESS, false)
+
+    fun setColabUploadInProgress(context: Context, inProgress: Boolean) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .edit().putBoolean(KEY_COLAB_UPLOAD_IN_PROGRESS, inProgress).apply()
+    }
+
+    fun isColabUploadInProgress(context: Context): Boolean =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .getBoolean(KEY_COLAB_UPLOAD_IN_PROGRESS, false)
+
+    fun setColabSortInProgress(context: Context, inProgress: Boolean) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .edit().putBoolean(KEY_COLAB_SORT_IN_PROGRESS, inProgress).apply()
+    }
+
+    fun isColabSortInProgress(context: Context): Boolean =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .getBoolean(KEY_COLAB_SORT_IN_PROGRESS, false)
 }

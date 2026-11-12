@@ -5,11 +5,15 @@ import android.content.ContentUris
 import android.content.ContentValues
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.net.Uri
 import android.os.Build
 import android.provider.MediaStore
 import android.util.Size
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import androidx.work.ExistingWorkPolicy
+import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.WorkManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -84,6 +88,10 @@ class SorterViewModel(app: Application) : AndroidViewModel(app) {
 
     private val _isMoving = MutableStateFlow(false)
     val isMoving: StateFlow<Boolean> = _isMoving.asStateFlow()
+
+    // v0.4 — Colab status line, shown under the two blue buttons.
+    private val _colabLabel = MutableStateFlow("")
+    val colabLabel: StateFlow<String> = _colabLabel.asStateFlow()
 
     /** Classifier owned here, closed only in onCleared() (v0.2 fix). */
     private val classifier = Classifier(getApplication())
@@ -243,6 +251,59 @@ class SorterViewModel(app: Application) : AndroidViewModel(app) {
     fun exportPlan() {
         viewModelScope.launch(Dispatchers.IO) {
             runCatching { PlanStore.writePlan(getApplication(), _items.value) }
+        }
+    }
+
+    // ---- v0.4 Colab path ----
+    // Upload and Sort run as WorkManager workers, not in
+    // viewModelScope, so they survive rotation AND leaving the
+    // app AND the system killing the process. REPLACE (not KEEP)
+    // on a user tap: v0.3.0's KEEP silently dropped a new scan
+    // when old work with the same name existed. BootReceiver
+    // re-enqueues with KEEP, so a boot never duplicates a run.
+
+    fun enqueueColabUpload() {
+        _colabLabel.value = "Building thumbnails zip in the background…"
+        runCatching {
+            WorkManager.getInstance(getApplication()).enqueueUniqueWork(
+                ColabUploadWorker.UNIQUE_UPLOAD,
+                ExistingWorkPolicy.REPLACE,
+                OneTimeWorkRequestBuilder<ColabUploadWorker>()
+                    .addTag(ColabUploadWorker.TAG_UPLOAD).build())
+        }.onFailure { _colabLabel.value = "Upload could not start: ${it.message}" }
+    }
+
+    fun enqueueColabSort() {
+        if (_items.value.isEmpty()) {
+            _colabLabel.value = "No plan loaded — tap Sort and pick the Colab plan.csv first."
+            return
+        }
+        _colabLabel.value = "Sorting from Colab plan in the background…"
+        runCatching {
+            WorkManager.getInstance(getApplication()).enqueueUniqueWork(
+                ColabSortWorker.UNIQUE_SORT,
+                ExistingWorkPolicy.REPLACE,
+                OneTimeWorkRequestBuilder<ColabSortWorker>()
+                    .addTag(ColabSortWorker.TAG_SORT).build())
+        }.onFailure { _colabLabel.value = "Sort could not start: ${it.message}" }
+    }
+
+    /** Import a plan.csv downloaded from Colab. Returns true if any rows loaded. */
+    fun importColabPlan(uri: Uri, onDone: (Boolean, Int) -> Unit) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val items = runCatching { ColabPlan.parse(getApplication(), uri) }.getOrDefault(emptyList())
+            if (items.isNotEmpty()) {
+                runCatching { PlanStore.writePlan(getApplication(), items) }
+            }
+            withContext(Dispatchers.Main) {
+                if (items.isNotEmpty()) {
+                    _items.value = items
+                    _colabLabel.value = "Colab plan loaded: ${items.size} photos. Tap Sort to sort from it."
+                } else {
+                    _colabLabel.value = "That plan.csv had no photos I could match on this phone."
+                }
+                onDone(items.isNotEmpty(), items.size)
+            }
         }
     }
 

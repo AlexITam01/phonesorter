@@ -1,17 +1,21 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <!--
-      Photo Sorter (local only).
-      Deliberately NO android.permission.INTERNET.
-      The core sort runs entirely on-device. The optional cloud path
-      (see CloudUpload.kt / README) is OFF by default, user-supplied,
-      and would require INTERNET to be added by the user who opts in.
+      Photo Sorter. Core sort is local only (no network use).
+      v0.4 adds INTERNET for the opt-in Colab path only — the two
+      blue buttons. See CloudUpload.kt / README.
     -->
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
     <!-- Android 12 and below: -->
     <uses-permission
         android:name="android.permission.READ_EXTERNAL_STORAGE"
         android:maxSdkVersion="32" />
+    <!-- v0.4: INTERNET is ONLY for the opt-in Colab path (the two
+         blue buttons). The local Scan path still runs fully
+         on-device with no network use. Tapping "Upload to
+         notebook" is the explicit opt-in — nothing uploads on
+         its own, and the button opens the Colab notebook URL. -->
+    <uses-permission android:name="android.permission.INTERNET" />
     <!-- v0.3.0: WorkManager foreground workers run as a foreground
          service while sorting, and BootReceiver resumes an
          unfinished scan after a reboot. -->

@@ -11,7 +11,8 @@ package com.photosorter.app
  * third-party server is uploading the photos, just smaller.
  *
  * So the default path in this app is fully on-device (see
- * Classifier.kt) and this file is only a documented, disabled stub:
+ * Classifier.kt) and this file is only a documented, disabled stub
+ * for a direct-to-server upload:
  *
  *  - [enabled] is false unless the user explicitly turns it on in
  *    Settings and types in their OWN server URL (e.g. a home server
@@ -20,8 +21,15 @@ package com.photosorter.app
  *  - Images flagged NSFW-suspect are NEVER uploaded, even when
  *    enabled (see [isUploadable]).
  *  - Uploads, if ever enabled, are downscaled to 256 px first.
- *  - The app manifest deliberately has no INTERNET permission; a
- *    user who opts in must add it themselves, knowingly.
+ *
+ * v0.4 — the Colab path is DIFFERENT from this stub, and Alex
+ * explicitly asked for it: the two blue buttons build a thumbnails
+ * zip (max 384 px) and open a free Colab notebook, where NudeNet +
+ * a vision model sort it and the user downloads plan.csv. That
+ * path DOES include NSFW-suspect thumbnails, on purpose — Colab's
+ * NudeNet is what sorts them — and it is opt-in per tap, never
+ * automatic. See ColabUploadWorker.kt / colab/README.md for the
+ * full honest limits. This stub stays disabled.
  *
  * This class intentionally does no network I/O. It exists so the
  * opt-in design is explicit in code, not just in the README.

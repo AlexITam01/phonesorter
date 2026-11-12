@@ -9,6 +9,11 @@ package com.photosorter.app
  * classifier (or the user, on review) says so explicitly. See
  * NsfwClassifier.kt for why on-device futanari detection is
  * approximate and always needs user review.
+ *
+ * v0.4: Colab plans may use deeper categories, e.g. "meme/anime"
+ * or "food/meal" (top category + subcategory from the notebook).
+ * Those are ordinary category strings here — they show as their
+ * own row and folderName() turns every "/" into " - ".
  */
 object Categories {
     val ALL = listOf(

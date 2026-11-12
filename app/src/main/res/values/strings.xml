@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Photo Sorter</string>
-    <string name="privacy_notice">Local only. No internet permission. Photos are classified on-device from thumbnails (max 384 px). Nothing is uploaded, nothing moves or deletes without your approval per category. NSFW explicit captions are shown as [redacted].</string>
+    <string name="privacy_notice">Local Scan is fully on-device (thumbnails max 384 px, nothing uploaded). The two blue buttons below are the opt-in Colab path: Upload to notebook zips thumbnails to Download/PhotoSorter-Colab and opens a free Colab notebook (NudeNet + vision model, plan.csv, wipe after). Sort imports that plan.csv and sorts from it. Nothing moves or deletes without your approval per category. NSFW explicit captions are shown as [redacted].</string>
 </resources>

@@ -1,7 +1,9 @@
-# Photo Sorter — local only (Android)
+# Photo Sorter (Android)
 
-Sorts the photos on your phone into categories, **entirely on-device**.
-No account, no cloud upload, no internet permission.
+Sorts the photos on your phone into categories. **Local Scan is
+entirely on-device** — no account, no cloud upload. **v0.4 adds an
+opt-in Colab path** (two blue buttons, see below) — that path does
+upload thumbnails to a free Colab notebook, on purpose, per tap.
 
 App name: **Photo Sorter** · Package: `com.photosorter.app`
 minSdk 26 · targetSdk 34 · Kotlin 1.9.24 · AGP 8.5.2 · Gradle 8.9
@@ -12,8 +14,10 @@ minSdk 26 · targetSdk 34 · Kotlin 1.9.24 · AGP 8.5.2 · Gradle 8.9
    (`READ_MEDIA_IMAGES`), makes a thumbnail of at most **384 px** on the
    long edge, and runs classification on that thumbnail only. Full-resolution
    photos are never loaded for classification and never leave the phone.
-2. **No internet permission.** The manifest deliberately has no
-   `INTERNET` permission. The core sort cannot send anything anywhere.
+2. **No internet use for local Scan.** The core sort cannot send
+   anything anywhere. v0.4 adds `INTERNET` to the manifest **only**
+   for the opt-in Colab buttons (opening the notebook URL) — the
+   local Scan path still uses no network at all.
 3. **Plan first, approval second.** Scanning writes `plan.csv` /
    `plan.json` (in the app's external files dir) before anything moves
    or deletes. Nothing is moved or deleted until you tap **Approve move**
@@ -193,6 +197,67 @@ Alex asked for three things; all three are in this version:
      delete step needs the Activity); the files already copied
      stay in `Pictures/Sorted/<category>/` and the category
      can simply be re-approved.
+
+## v0.4.0 — Colab path: two blue buttons, NudeNet + vision model, subcategories (2026-11-12)
+
+Alex: the on-device categories were bad and the phone sort took
+forever. The extreme option: sort in a free Colab notebook instead.
+
+**The two blue buttons** sit directly below the green progress bar,
+in the fourth row, split side by side — each is a little less than
+half a full-width button, blue `#1565C0`, white text:
+
+1. **Upload to notebook** — builds `thumbnails.zip` (max 384 px
+   JPEGs + `manifest.csv` with MediaStore ids) in
+   `Download/PhotoSorter-Colab/` in a WorkManager foreground worker
+   (`ColabUploadWorker.kt`), with the green bar showing
+   `Uploading N / total`. On success it opens the Colab notebook
+   (`colab/PhotoSorter_Colab.ipynb`); you tap Upload in Colab and
+   pick `thumbnails.zip`.
+   - Honest limit: Colab has **no inbound endpoint**, so the phone
+     cannot push the zip straight into a Colab session. The button
+     does the on-phone half (zip + progress) and opens the notebook;
+     the last upload tap is in Colab's UI.
+   - The zip **includes NSFW-suspect thumbnails on purpose** —
+     Colab's NudeNet is what sorts them. That is the opt-in you
+     make by tapping this button, per tap, never automatic. The
+     local Scan path stays fully on-device and is still the default.
+2. **Sort** — if no plan is loaded, it opens a file picker for the
+   `plan.csv` you downloaded from Colab (`ColabPlan.kt` imports it,
+   matching by MediaStore id, subcategories become `top/sub`
+   categories). If a plan is loaded, it sorts from it in a
+   WorkManager foreground worker (`ColabSortWorker.kt`), copying
+   to `Pictures/Sorted/<category> - <subcategory>/`, bar showing
+   `Sorting N / total`. Originals stay until you delete them per
+   category, after checking the Sorted folders.
+
+**Surviving rotation / shutdown:** both workers run in WorkManager
+(foreground, `FOREGROUND_SERVICE_TYPE_DATA_SYNC`, `setForeground()`
+in `runCatching` — the v0.3.1 lessons), with progress driven from
+the **latest RUNNING** WorkInfo, not `firstOrNull()` (the v0.3.0
+stale-bar bug), and `REPLACE` on a user tap (v0.3.0's `KEEP`
+silently dropped new work). `WorkState` records in-flight Colab
+work and `BootReceiver` re-enqueues it on boot. A full power-off
+stops work while the phone is off — nothing runs with no power —
+but it resumes on boot from the plan / rebuilds the zip. That is
+a resume, not a run-through-power-off.
+
+**The Colab notebook** (`colab/PhotoSorter_Colab.ipynb`, also
+`colab/README.md`): free, private, no Drive mount, no Drive save.
+NudeNet first (≥0.5 explicit, skip vision, caption `[redacted]`;
+≥0.2 needs review), then **Qwen2.5-VL-3B** (CLIP zero-shot fallback
+if Qwen fails / no GPU), top category **+ subcategory**
+(e.g. `meme/anime`, `food/meal`, `nsfw_explicit/futanari`),
+checkpoints every 50 photos to `plan_partial.csv`, writes
+`plan.csv` / `plan.json`, you download the plan, then the **wipe
+cell deletes every thumbnail from the runtime**. A 384 px thumbnail
+still shows what a photo is, and deletion is verified only by
+listing `/content` afterwards — that is the honest privacy limit.
+
+**If it still crashes, Alex should report:** which blue button,
+whether the bar appeared, and whether it was instant or after a
+few seconds — that distinguishes a worker crash from a zip /
+plan-import issue, same as the v0.3.1 Scan crash report.
 
 ## v0.3.1 — URGENT FIX: Scan crashed in v0.3.0, no progress bar (2026-11-10)
 

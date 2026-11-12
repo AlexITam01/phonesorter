@@ -2,6 +2,7 @@ package com.photosorter.app
 
 import android.Manifest
 import android.app.Activity
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -27,6 +28,8 @@ import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
+import androidx.work.WorkInfo
+import androidx.work.WorkManager
 import com.photosorter.app.databinding.ActivityMainBinding
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -79,12 +82,35 @@ class MainActivity : AppCompatActivity() {
         if (granted) viewModel.startScan() else toast("Photo permission is needed to scan.")
     }
 
+    // v0.4: separate permission result for the Upload button, so
+    // granting it enqueues the Colab upload — not a local scan.
+    private val uploadPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) {
+            viewModel.enqueueColabUpload()
+            toast("Building thumbnails zip in the background — you can leave the app.")
+        } else toast("Photo permission is needed to build the thumbnails zip.")
+    }
+
     private val deleteLauncher = registerForActivityResult(
         ActivityResultContracts.StartIntentSenderForResult()
     ) { result ->
         if (isFinishing || isDestroyed) return@registerForActivityResult
         if (result.resultCode == Activity.RESULT_OK) toast("Approved action completed.")
         else toast("Delete/move was not confirmed — nothing was deleted.")
+    }
+
+    // v0.4: pick the plan.csv downloaded from Colab.
+    private val planPickerLauncher = registerForActivityResult(
+        ActivityResultContracts.GetContent()
+    ) { uri ->
+        if (uri == null) return@registerForActivityResult
+        viewModel.importColabPlan(uri) { ok, count ->
+            if (isFinishing || isDestroyed) return@importColabPlan
+            toast(if (ok) "Colab plan loaded: $count photos. Tap Sort to sort from it."
+                else "That plan.csv had no photos I could match on this phone.")
+        }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -110,6 +136,27 @@ class MainActivity : AppCompatActivity() {
             viewModel.exportPlan()
             toast("Plan saved: plan.csv / plan.json in app files.")
         }
+        // v0.4: the two blue Colab buttons, below the progress bar.
+        binding.btnUploadColab.setOnClickListener {
+            requestPermissionAndUploadColab()
+        }
+        binding.btnSortColab.setOnClickListener {
+            if (viewModel.items.value.isEmpty()) {
+                // No plan loaded yet — pick the plan.csv from Colab.
+                toast("Pick the plan.csv you downloaded from Colab.")
+                planPickerLauncher.launch("*/*")
+            } else {
+                viewModel.enqueueColabSort()
+                toast("Sorting from Colab plan in the background — you can leave the app.")
+            }
+        }
+        lifecycleScope.launch {
+            viewModel.colabLabel.collect { label ->
+                binding.tvColab.text = label
+            }
+        }
+        observeColabWork(ColabUploadWorker.UNIQUE_UPLOAD, isUpload = true)
+        observeColabWork(ColabSortWorker.UNIQUE_SORT, isUpload = false)
         binding.tvPrivacy.text = getString(R.string.privacy_notice)
         binding.rvCategories.layoutManager = LinearLayoutManager(this)
         binding.rvPhotos.layoutManager = GridLayoutManager(this, 3)
@@ -167,6 +214,74 @@ class MainActivity : AppCompatActivity() {
     // NOTE: no onDestroy() classifier cleanup here — that was a v0.1
     // crash cause (rotation closed the Classifier mid-scan).
     // The ViewModel closes it in onCleared().
+
+    private fun requestPermissionAndUploadColab() {
+        val perm = if (Build.VERSION.SDK_INT >= 33)
+            Manifest.permission.READ_MEDIA_IMAGES
+        else Manifest.permission.READ_EXTERNAL_STORAGE
+        if (ContextCompat.checkSelfPermission(this, perm) == PackageManager.PERMISSION_GRANTED) {
+            viewModel.enqueueColabUpload()
+            toast("Building thumbnails zip in the background — you can leave the app.")
+        } else {
+            uploadPermissionLauncher.launch(perm)
+        }
+    }
+
+    /**
+     * v0.4 — drive the green progress bar from a Colab worker's
+     * WorkInfo. Picks the latest RUNNING run first, then the most
+     * recent finished one — v0.3.0's bug was taking
+     * infos.firstOrNull(), which could be an OLD SUCCEEDED/FAILED
+     * run and drive the bar from stale data (or never at all).
+     * On upload success, opens the Colab notebook so the user can
+     * upload thumbnails.zip there (Colab has no inbound endpoint
+     * the phone can push to directly — see ColabUploadWorker).
+     * On sort success, the copies are done; originals are still
+     * there until the user deletes them per category.
+     */
+    private fun observeColabWork(uniqueName: String, isUpload: Boolean) {
+        WorkManager.getInstance(this)
+            .getWorkInfosForUniqueWorkLiveData(uniqueName)
+            .observe(this) { infos ->
+                if (infos.isNullOrEmpty() || isFinishing || isDestroyed) return@observe
+                val info = infos.firstOrNull { it.state == WorkInfo.State.RUNNING }
+                    ?: infos.maxByOrNull { it.runAttemptCount }
+                    ?: return@observe
+                val label = info.progress.getString(
+                    if (isUpload) ColabUploadWorker.KEY_LABEL else ColabSortWorker.KEY_LABEL)
+                    ?: ""
+                val done = info.progress.getInt(
+                    if (isUpload) ColabUploadWorker.KEY_DONE else ColabSortWorker.KEY_DONE, 0)
+                val total = info.progress.getInt(
+                    if (isUpload) ColabUploadWorker.KEY_TOTAL else ColabSortWorker.KEY_TOTAL, 0)
+                if (info.state == WorkInfo.State.RUNNING && total > 0) {
+                    binding.pbProgress.max = total.coerceAtLeast(1)
+                    binding.pbProgress.progress = done
+                    binding.pbProgress.visibility = View.VISIBLE
+                    binding.tvProgress.text = label
+                }
+                if (info.state == WorkInfo.State.SUCCEEDED) {
+                    binding.pbProgress.visibility = View.GONE
+                    binding.tvProgress.text = label
+                    if (isUpload) {
+                        val count = info.outputData.getInt(ColabUploadWorker.KEY_COUNT, 0)
+                        toast("Zip ready: $count thumbnails in Download/PhotoSorter-Colab. Opening the notebook — upload thumbnails.zip there.")
+                        runCatching {
+                            startActivity(Intent(Intent.ACTION_VIEW,
+                                android.net.Uri.parse(ColabUploadWorker.COLAB_URL)))
+                        }
+                    } else {
+                        val copied = info.outputData.getInt(ColabSortWorker.KEY_COPIED, 0)
+                        val tot = info.outputData.getInt(ColabSortWorker.KEY_TOTAL, 0)
+                        toast("Sorted $copied / $tot into Pictures/Sorted/. Originals are still there — delete them per category after checking.")
+                    }
+                }
+                if (info.state == WorkInfo.State.FAILED) {
+                    binding.pbProgress.visibility = View.GONE
+                    binding.tvProgress.text = label.ifEmpty { "Colab work failed." }
+                }
+            }
+    }
 
     private fun requestPermissionAndScan() {
         val perm = if (Build.VERSION.SDK_INT >= 33)

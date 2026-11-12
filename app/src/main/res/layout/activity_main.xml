@@ -64,6 +64,51 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="4dp" />
 
+        <!-- v0.4: Colab path — the two blue buttons Alex asked for.
+             They sit directly below the progress bar / tvProgress,
+             in the fourth row, split side by side. Each button is
+             layout_weight="1" with layout_width="0dp" and a 4dp
+             margin, so each one is a little less than half the
+             full-width bar buttons above. Blue #1565C0, white text.
+             Button 1 builds thumbnails.zip in a background worker
+             and opens the Colab notebook; button 2 imports the
+             Colab plan.csv and sorts from it in a background
+             worker. Both workers survive rotation / app kill /
+             reboot (see ColabUploadWorker / ColabSortWorker). -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:orientation="horizontal">
+
+            <Button
+                android:id="@+id/btnUploadColab"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginEnd="4dp"
+                android:layout_weight="1"
+                android:backgroundTint="#1565C0"
+                android:text="Upload to notebook"
+                android:textColor="#FFFFFF" />
+
+            <Button
+                android:id="@+id/btnSortColab"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="4dp"
+                android:layout_weight="1"
+                android:backgroundTint="#1565C0"
+                android:text="Sort"
+                android:textColor="#FFFFFF" />
+        </LinearLayout>
+
+        <TextView
+            android:id="@+id/tvColab"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:textSize="13sp" />
+
         <TextView
             android:id="@+id/tvSummary"
             android:layout_width="match_parent"
